@@ -6,6 +6,7 @@ from collections import namedtuple
 import datetime
 import logging
 from platform import python_version
+import time
 
 import requests
 
@@ -40,12 +41,18 @@ class Client:
 
     def __init__(self, bearer_token=None, consumer_key=None,
                  consumer_secret=None, access_token=None,
-                 access_token_secret=None):
+                 access_token_secret=None, retry_count=0,
+                 wait_on_rate_limit=False, retry_delay=0,
+                 retry_errors=None):
         self.bearer_token = bearer_token
         self.consumer_key = consumer_key
         self.consumer_secret = consumer_secret
         self.access_token = access_token
         self.access_token_secret = access_token_secret
+        self.retry_count = retry_count
+        self.wait_on_rate_limit = wait_on_rate_limit
+        self.retry_delay = retry_delay
+        self.retry_errors = retry_errors
 
         self.session = requests.Session()
         self.user_agent = (
@@ -58,7 +65,7 @@ class Client:
         host = "https://api.twitter.com"
         headers = {"User-Agent": self.user_agent}
         auth = None
-        # TODO: Ability to choose app or user auth
+        retries_performed, remaining_calls, reset_time = 0, None, None
         if user_auth:
             auth = OAuthHandler(self.consumer_key, self.consumer_secret)
             auth.set_access_token(self.access_token, self.access_token_secret)
@@ -66,19 +73,45 @@ class Client:
         else:
             headers["Authorization"] = f"Bearer {self.bearer_token}"
         # TODO: log.debug
-        with self.session.request(
-            method, host + route, params=params, json=json, headers=headers,
-            auth=auth
-        ) as response:
-            # TODO: log.debug
-            if response.status_code in (400, 403):
-                print(response.status_code)
-                # TODO: Handle
-            elif response.status_code != 200:
-                print(response.status_code)
-                # TODO: Handle
-            # TODO: Handle rate limits
-            return response.json()
+        while retries_performed <= self.retry_count:
+            if (self.wait_on_rate_limit and reset_time is not None
+                    and remaining_calls is not None
+                    and remaining_calls < 1):
+                # Handle running out of API calls
+                sleep_time = reset_time - int(time.time())
+                if sleep_time > 0:
+                    log.warning(f"Rate limit reached. Sleeping for: {sleep_time}")
+                    time.sleep(sleep_time + 1)  # Sleep for extra sec
+            with self.session.request(
+                method, host + route, params=params, json=json, headers=headers,
+                auth=auth
+            ) as response:
+                if 200 <= response.status_code < 300:
+                    log.debug(f"Response status code {response.status_code}")
+                    break
+                rem_calls = response.headers.get('x-rate-limit-remaining')
+                if rem_calls is not None:
+                    remaining_calls = int(rem_calls)
+                elif remaining_calls is not None:
+                    remaining_calls -= 1
+
+                reset_time = response.headers.get('x-rate-limit-reset')
+                if reset_time is not None:
+                    reset_time = int(reset_time)
+
+                if response.status_code == 429:
+                    if remaining_calls == 0:
+                        continue
+                    if 'retry-after' in response.headers:
+                        retry_delay = float(response.headers['retry-after'])
+                        # time.sleep(retry_delay)
+                        # retries_performed += 1
+                elif self.retry_errors and response.status_code not in self.retry_errors:
+                    # Exit request loop if non-retry error code
+                    break
+            time.sleep(retry_delay)
+            retries_performed += 1
+        return response.json()
 
     def _make_request(self, method, route, params={}, endpoint_parameters=None,
                       json=None, data_type=None, user_auth=False):
