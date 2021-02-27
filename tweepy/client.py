@@ -43,7 +43,7 @@ class Client:
                  consumer_secret=None, access_token=None,
                  access_token_secret=None, retry_count=0,
                  wait_on_rate_limit=False, retry_delay=0,
-                 retry_errors=None):
+                 retry_errors=None, user_auth=False):
         self.bearer_token = bearer_token
         self.consumer_key = consumer_key
         self.consumer_secret = consumer_secret
@@ -53,6 +53,7 @@ class Client:
         self.wait_on_rate_limit = wait_on_rate_limit
         self.retry_delay = retry_delay
         self.retry_errors = retry_errors
+        self.user_auth = user_auth
 
         self.session = requests.Session()
         self.user_agent = (
@@ -301,7 +302,7 @@ class Client:
                 "media.fields", "pagination_token", "place.fields",
                 "poll.fields", "since_id", "start_time", "tweet.fields",
                 "until_id", "user.fields"
-            ), data_type=Tweet
+            ), data_type=Tweet, user_auth=self.user_auth
         )
 
     def hide_reply(self, id):
