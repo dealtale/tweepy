@@ -11,11 +11,13 @@ import time
 import requests
 
 import tweepy
+from tweepy.error import TweepError
 from tweepy.auth import OAuthHandler
 from tweepy.media import Media
 from tweepy.place import Place
 from tweepy.poll import Poll
 from tweepy.tweet import Tweet
+from tweepy.parsers import ModelParser
 from tweepy.user import User
 
 log = logging.getLogger(__name__)
@@ -54,6 +56,7 @@ class Client:
         self.retry_delay = retry_delay
         self.retry_errors = retry_errors
         self.user_auth = user_auth
+        self.parser = ModelParser()
 
         self.session = requests.Session()
         self.user_agent = (
@@ -100,18 +103,24 @@ class Client:
                 if reset_time is not None:
                     reset_time = int(reset_time)
 
+                retry_delay = self.retry_delay
                 if response.status_code == 429:
                     if remaining_calls == 0:
                         continue
                     if 'retry-after' in response.headers:
                         retry_delay = float(response.headers['retry-after'])
-                        # time.sleep(retry_delay)
-                        # retries_performed += 1
                 elif self.retry_errors and response.status_code not in self.retry_errors:
                     # Exit request loop if non-retry error code
                     break
             time.sleep(retry_delay)
             retries_performed += 1
+        if response.status_code and not 200 <= response.status_code < 300:
+            try:
+                error_msg, api_error_code = self.parser.parse_error(response.text)
+            except Exception:
+                error_msg = f"Twitter error response: status code = {response.status_code}"
+                api_error_code = None
+            raise TweepError(error_msg, response, api_code=api_error_code)
         return response.json()
 
     def _make_request(self, method, route, params={}, endpoint_parameters=None,
